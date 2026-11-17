@@ -1,0 +1,12 @@
+# private data and local settings: never publish these
+results/
+settings.json
+*.xlsx
+*.meta.json
+
+# environment and caches
+venv/
+.venv/
+__pycache__/
+*.pyc
+.env
