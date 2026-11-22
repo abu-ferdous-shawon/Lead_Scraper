@@ -313,9 +313,12 @@ def body_to_html(body, cid=None):
 
 
 def send_email(to, subject, body, sender_name, sender_email, app_password,
-               host="smtp.gmail.com", port=465, use_ssl=True, image=None, cc=None, bcc=None):
+               host="smtp.gmail.com", port=465, use_ssl=True, image=None, cc=None, bcc=None,
+               in_reply_to=None, references=None):
     """Send the email. With `image` (JPEG bytes) the report is shown inline, under the text of the email.
-    cc / bcc: comma-separated text or a list. Bcc is only an envelope recipient (never written in a header)."""
+    cc / bcc: comma-separated text or a list. Bcc is only an envelope recipient (never written in a header).
+    in_reply_to / references: the Message-ID(s) of the email this one answers, so mail apps show it in the same
+    conversation. Returns this email's own Message-ID (keep it, a later follow-up needs it)."""
     to_list, cc_list, bcc_list = split_addrs(to), split_addrs(cc), split_addrs(bcc)
     msg = EmailMessage()
     msg["From"] = formataddr((sender_name, sender_email))
@@ -323,6 +326,11 @@ def send_email(to, subject, body, sender_name, sender_email, app_password,
     if cc_list:
         msg["Cc"] = ", ".join(cc_list)
     msg["Subject"] = subject
+    message_id = make_msgid(domain=(sender_email.split("@")[-1] or "mail.local"))
+    msg["Message-ID"] = message_id
+    if in_reply_to:
+        msg["In-Reply-To"] = in_reply_to
+        msg["References"] = " ".join(x for x in [references or "", in_reply_to] if x).strip()
     msg.set_content(body)
     if image:
         cid = make_msgid(domain=(sender_email.split("@")[-1] or "report.local"))
@@ -341,6 +349,7 @@ def send_email(to, subject, body, sender_name, sender_email, app_password,
             if a_.lower() not in [x.lower() for x in everyone]:
                 everyone.append(a_)
         server.send_message(msg, to_addrs=everyone)
+    return message_id
 
 
 def split_addrs(value):
@@ -355,6 +364,37 @@ def split_addrs(value):
 def bad_addrs(value):
     """The addresses in `value` that do not look like email addresses."""
     return [a_ for a_ in split_addrs(value) if not EMAIL_RE.match(a_)]
+
+
+# ------------------------------------------------------------ sent copies
+def save_sent_copy(folder, search, company, to, cc, bcc, subject, body, image=None, message_id="",
+                   references="", kind="first"):
+    """Keep what was sent (text, Cc/Bcc, report image, time) so the Email tracker page can show it later.
+    `search` is the name of the results file the company came from (e.g. 'dentist_in_dhaka_bangladesh')."""
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    now = datetime.now()
+    base = (now.strftime("%Y%m%d_%H%M%S_") + re.sub(r"[^a-z0-9]+", "_", (to or "").lower()).strip("_"))[:90]
+    if image:
+        (folder / (base + ".jpg")).write_bytes(image)
+    rec = {"time": now.strftime("%Y-%m-%d %H:%M:%S"), "search": search, "company": company, "to": to,
+           "cc": cc or "", "bcc": bcc or "", "subject": subject, "body": body,
+           "image": (base + ".jpg") if image else "", "file": base + ".json",
+           "message_id": message_id or "", "references": references or "", "kind": kind}
+    (folder / (base + ".json")).write_text(json.dumps(rec, ensure_ascii=False), encoding="utf-8")
+
+
+def read_sent_copies(folder):
+    """All saved copies, newest first."""
+    out = []
+    for f in Path(folder).glob("*.json"):
+        try:
+            rec = json.loads(f.read_text(encoding="utf-8"))
+            rec.setdefault("file", f.name)
+            out.append(rec)
+        except Exception:
+            continue
+    return sorted(out, key=lambda r: r.get("time", ""), reverse=True)
 
 
 # ------------------------------------------------------------------- sent log

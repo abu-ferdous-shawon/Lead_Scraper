@@ -7,5 +7,6 @@ st.set_page_config(page_title="Business Lead Finder", layout="wide")
 pages = st.navigation([
     st.Page("search_page.py", title="Find companies", default=True),
     st.Page("outreach_page.py", title="Audit and email"),
+    st.Page("tracker_page.py", title="Email tracker"),
 ])
 pages.run()

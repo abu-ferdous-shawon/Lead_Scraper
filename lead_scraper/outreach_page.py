@@ -24,6 +24,7 @@ RESULTS = HERE / "results"
 RESULTS.mkdir(exist_ok=True)
 SETTINGS = HERE / "settings.json"
 SENT_LOG = RESULTS / "sent_log.csv"
+SENT_DIR = RESULTS / "sent_emails"   # a copy of every email sent from here, for the Email tracker page
 
 # Gmail by default. The environment overrides exist only so the page can be tested without sending real mail.
 SMTP_HOST = os.environ.get("LEADS_SMTP_HOST", "smtp.gmail.com")
@@ -452,13 +453,14 @@ def send_now(a_):
     subj_, body_ = st.session_state[f"subj_{k_}"], st.session_state[f"body_{k_}"]
     try:
         img_ = image_for(a_) if st.session_state.get("attach_img", True) else None
-        outreach.send_email(to_, ("[TEST] " if test_ else "") + subj_, body_, sender_name, gmail, app_pw,
+        mid_ = outreach.send_email(to_, ("[TEST] " if test_ else "") + subj_, body_, sender_name, gmail, app_pw,
                             SMTP_HOST, SMTP_PORT, SMTP_SSL, image=img_,
                             cc=None if test_ else cc_, bcc=None if test_ else bcc_)
         if test_:
             st.session_state["flash"] = ("ok", f"Test email sent to {to_}. Check that inbox (and its spam folder).")
         else:
             outreach.log_sent(SENT_LOG, to_, a_["company"], subj_)
+            outreach.save_sent_copy(SENT_DIR, src.stem, a_["company"], to_, cc_, bcc_, subj_, body_, img_, message_id=mid_)
             st.session_state[f"ok_{k_}"] = True
             st.session_state["flash"] = ("ok", f"Sent to {to_}.")
     except Exception as e:
@@ -616,6 +618,8 @@ with right:
             st.caption("This email is very long. If Gmail cuts it off, copy the body from the box above instead.")
         if mark_it:
             outreach.log_sent(SENT_LOG, to_addr, a["company"], st.session_state[skey])
+            outreach.save_sent_copy(SENT_DIR, src.stem, a["company"], to_addr, cc_addr, bcc_addr,
+                                    st.session_state[skey], st.session_state[bkey], use_img)
             st.session_state["flash"] = ("ok", f"Marked as sent: {to_addr}.")
             st.rerun()
         try:
@@ -688,12 +692,16 @@ def run_batch(items, label, test_to=None, gap_s=0):
                 break
         bar.progress((n - 1) / len(items), text=f"Sending {n} of {len(items)}: {x['company']}")
         try:
-            outreach.send_email(test_to or to_x, ("[TEST] " if test_to else "") + dx["subject"], dx["body"],
+            mid_x = outreach.send_email(test_to or to_x, ("[TEST] " if test_to else "") + dx["subject"], dx["body"],
                                 sender_name, gmail, app_pw, SMTP_HOST, SMTP_PORT, SMTP_SSL,
                                 image=image_for(x) if st.session_state.get("attach_img", True) else None,
                                 cc=None if test_to else dx.get("cc"), bcc=None if test_to else dx.get("bcc"))
             if test_to is None:
                 outreach.log_sent(SENT_LOG, to_x, x["company"], dx["subject"])
+                outreach.save_sent_copy(SENT_DIR, src.stem, x["company"], to_x, dx.get("cc"), dx.get("bcc"),
+                                        dx["subject"], dx["body"],
+                                        image_for(x) if st.session_state.get("attach_img", True) else None,
+                                        message_id=mid_x)
             ok_.append(x["company"])
         except Exception as e:
             failed_.append((x["company"], friendly_error(e)))
