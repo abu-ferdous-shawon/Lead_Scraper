@@ -366,6 +366,61 @@ def bad_addrs(value):
     return [a_ for a_ in split_addrs(value) if not EMAIL_RE.match(a_)]
 
 
+# ------------------------------------------------------------ follow-up emails
+_AREA = {"Business details match": "business details consistency", "Weekly posts": "posting activity"}
+
+
+def followup_body(company, label, pct, band, audit_result, sender_name="", business=""):
+    """A follow-up written around ONE score from the audit report (e.g. Customer reviews, 48%).
+    Only numbers and failed checks that the audit measured are used."""
+    a = audit_result or {}
+    facts = a.get("facts", {}) or {}
+    flagged = {c["id"]: c for c in a.get("checks", []) if c.get("ok") is False}
+
+    def names(ids):
+        return [flagged[i]["label"].lower() for i in ids if i in flagged][:3]
+
+    low = band in ("NEEDS WORK", "CRITICAL")
+    opener = (f"I'm following up on the Google listing audit I sent over. One result stood out: your {_AREA.get(label, label.lower())} "
+              f"scored {pct}% ({band.lower()}).")
+    if label == "Website":
+        web = [c["label"].lower() for c in a.get("checks", []) if c.get("area") == "Website" and c.get("ok") is False][:3]
+        mid = (f"The website checks flagged: {', '.join(web)}. These are usually quick to fix, and they shape how "
+               "visitors and Google see your site." if web else
+               "The website checks came back mostly clean, so the bigger gains are likely on your Google profile and "
+               "reviews.")
+    elif label == "Google profile":
+        mid = ("This reflects how complete your Google Business Profile is: the details people see when they find you "
+               "on Maps. " + ("There is room to complete it, and a fuller profile gives people more reasons to choose you."
+                              if low else "It is in decent shape, and a few additions could lift it further."))
+    elif label == "Search keywords":
+        bad = names(["title_local", "h1", "meta_desc", "schema"])
+        mid = ("On your homepage the checks flagged: " + ", ".join(bad) + ". These help Google understand what you do "
+               "and where." if bad else "Your homepage already speaks the local search language, so this is about "
+               "fine-tuning rather than fixing.")
+    elif label == "Business details match":
+        mid = ("The phone number on your Google listing doesn't match your website's homepage. " if "nap" in flagged
+               else "") + ("This is about your business name, address and phone number being the same everywhere "
+                           "online. When they differ, it is harder for Google to trust the listing.")
+    elif label == "Customer reviews":
+        n, r_ = facts.get("reviews"), facts.get("rating")
+        have = (f"You have {n:,} review{'' if n == 1 else 's'}" + (f" at {r_} stars" if r_ else "") + ". "
+                if isinstance(n, int) else "")
+        mid = have + ("Reviews are both a trust signal for customers and a ranking signal on Google Maps, so this is "
+                      "usually the quickest place to gain ground." if low else
+                      "Reviews are both a trust signal for customers and a ranking signal, so keeping them coming pays off.")
+    elif label == "Weekly posts":
+        mid = ("Regular Google posts show customers and Google that the business is active. " +
+               ("Yours look quiet, which is an easy gap to close." if low else "You are doing reasonably well here."))
+    else:
+        mid = "I can walk you through what sits behind that number."
+    me = sender_name or "[Your name]"
+    biz = business or "[Your business]"
+    return (f"Hi {company} Team,\n\n{opener}\n\n{mid}\n\n"
+            "If it helps, I can walk you through this part of the report, and what I would change first, on a short "
+            f"call whenever suits you.\n\nThanks,\n{me}\n{biz}")
+
+
 # ------------------------------------------------------------ sent copies
 def save_sent_copy(folder, search, company, to, cc, bcc, subject, body, image=None, message_id="",
                    references="", kind="first"):

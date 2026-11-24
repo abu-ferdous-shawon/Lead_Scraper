@@ -12,6 +12,7 @@ import streamlit as st
 import audit
 import infographic
 import outreach
+import report
 
 HERE = Path(__file__).parent
 RESULTS = HERE / "results"
@@ -117,8 +118,8 @@ def older_records(saved):
     return out
 
 
-def rebuild_image(stem, company):
-    """Draw the report image again from the saved audit of this search (the original JPG was not kept)."""
+def load_audit(stem, company):
+    """(audit, extra details, competitors, rank, total, query) for one company of one search, from the saved files."""
     audits = json.loads((RESULTS / f"audit_{stem}.json").read_text(encoding="utf-8"))["audits"]
     a = next(x for x in audits if x["company"] == company)
     df = pd.read_excel(RESULTS / f"{stem}.xlsx", dtype=str).fillna("")
@@ -138,8 +139,43 @@ def rebuild_image(stem, company):
         query = json.loads((RESULTS / f"{stem}.meta.json").read_text(encoding="utf-8")).get("query", stem)
     except Exception:
         query = stem
-    return infographic.build_infographic(a, extra, comps, outreach.load_settings(SETTINGS),
-                                         outreach.clean_query(query), rank, len(df))
+    return a, extra, comps, rank, len(df), outreach.clean_query(query)
+
+
+def rebuild_image(stem, company):
+    """Draw the report image again from the saved audit of this search (the original JPG was not kept)."""
+    a, extra, comps, rank, total, query = load_audit(stem, company)
+    return infographic.build_infographic(a, extra, comps, outreach.load_settings(SETTINGS), query, rank, total)
+
+
+def scores_for(r):
+    """The report's score areas for this email's company: [(label, percent, band)], best first. [] if unknown."""
+    ck = (r.get("search"), r.get("company"))
+    cache = st.session_state.setdefault("trk_scores", {})
+    if ck not in cache:
+        try:
+            a, extra, comps, *_ = load_audit(*ck)
+            sc = report.compute_scores(a, extra, comps)
+            rows = [(infographic.LABEL.get(n, n), int(round(v)), infographic.band_name(v))
+                    for n, v, _ in sc["cats"] if v is not None]
+            cache[ck] = (sorted(rows, key=lambda t: -t[1]), a)
+        except Exception:
+            cache[ck] = ([], None)
+    return cache[ck]
+
+
+def pick_topic(fid, r):
+    """Dropdown callback: write the follow-up text for the chosen score area."""
+    k, ss = f"fu_{fid}", st.session_state
+    choice = ss.get(k + "_topic")
+    rows, a = scores_for(r)
+    cfg = outreach.load_settings(SETTINGS)
+    for label, pct, band in rows:
+        if choice == f"{label} ({pct}%)":
+            ss[k + "_body"] = outreach.followup_body(r["company"], label, pct, band, a, cfg.get("sender_name", ""),
+                                                     cfg.get("business", ""))
+            return
+    ss[k + "_body"] = ss.get(k + "_default", ss.get(k + "_body", ""))
 
 
 def fid_of(r):
@@ -156,12 +192,14 @@ def toggle_followup(fid, r):
         st.session_state[k + "_cc"] = r.get("cc", "")
         st.session_state[k + "_bcc"] = r.get("bcc", "")
         st.session_state[k + "_subj"] = subj
+        st.session_state[k + "_topic"] = "General check-in"
         st.session_state[k + "_body"] = (
             f"Hi {r['company']} Team,\n\n"
             "I wanted to follow up on my email below about your Google listing and the audit report I put together. "
             "Did you get a chance to look at it?\n\n"
             "If it would help, I'm happy to go through the findings with you on a short call, whenever suits you.\n\n"
             f"Thanks,\n{cfg.get('sender_name') or '[Your name]'}\n{cfg.get('business') or '[Your business]'}")
+        st.session_state[k + "_default"] = st.session_state[k + "_body"]
     st.session_state[k + "_open"] = not st.session_state.get(k + "_open")
 
 
@@ -204,6 +242,14 @@ def followup_form(r, fid):
     c1.text_input("Cc (optional)", key=k + "_cc")
     c2.text_input("Bcc (optional)", key=k + "_bcc")
     st.text_input("Subject", key=k + "_subj")
+    rows, _a = scores_for(r)
+    if rows:
+        st.selectbox("Follow up about", ["General check-in"] + [f"{l} ({p}%)" for l, p, _ in rows],
+                     key=k + "_topic", on_change=pick_topic, args=(fid, r),
+                     help="The score areas from this company's audit report. Each one writes a different follow-up. "
+                          "Picking another one replaces the text below.")
+    else:
+        st.caption("The audit report scores are not available for this email, so only the general follow-up is offered.")
     st.text_area("Follow-up text (edit it as you like)", key=k + "_body", height=260)
     st.checkbox("Add the original email below as a quote", value=True, key=k + "_quote")
     problems = []
